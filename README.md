@@ -22,9 +22,7 @@
 
 點擊按鈕，填入 Token，Netlify 會自動 Fork 倉庫並完成所有設定：
 
-[![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/您的帳號/您的倉庫名稱)
-
-> 請將上方網址替換成您的 GitHub 倉庫網址
+[![Deploy to Netlify](https://www.netlify.com/img/deploy/button.svg)](https://app.netlify.com/start/deploy?repository=https://github.com/meikenakinori/calibre-looker)
 
 ---
 
