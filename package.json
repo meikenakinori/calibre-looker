@@ -1,0 +1,16 @@
+{
+  "name": "calibre-viewer-netlify",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "netlify dev",
+    "build": "echo \"No build step\""
+  },
+  "dependencies": {
+    "@netlify/blobs": "^6.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

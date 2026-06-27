@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="zh-TW">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Calibre 圖書館查看器</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }
+    .container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 2px solid #007cba; padding-bottom: 10px; }
+    .header h1 { margin: 0; }
+    .header-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 20px; }
+    .stat-card { background: #007cba; color: white; padding: 10px; border-radius: 4px; text-align: center; }
+    .stat-card .number { font-size: 24px; font-weight: bold; }
+    .stat-card .label { font-size: 12px; }
+    .btn { padding: 8px 16px; border-radius: 4px; cursor: pointer; border: none; font-size: 14px; text-decoration: none; display: inline-block; }
+    .btn-green  { background: #28a745; color: white; }
+    .btn-green:hover  { background: #218838; }
+    .btn-grey   { background: #6c757d; color: white; }
+    .btn-grey:hover   { background: #545b62; }
+    .btn-blue   { background: #0069c0; color: white; }
+    .btn-blue:hover   { background: #0053a0; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+    th { background-color: #007cba; color: white; font-weight: bold; }
+    tr:nth-child(even) { background-color: #f2f2f2; }
+    tr:hover { background-color: #e8f4f8; }
+    .title { font-weight: bold; color: #007cba; }
+    .authors { color: #666; }
+    .tags { font-size: 12px; color: #888; }
+    .rating { color: #ff9800; }
+    .formats { font-size: 11px; background: #e9ecef; padding: 2px 4px; border-radius: 2px; }
+    .search-box { margin-bottom: 20px; }
+    .search-box input { width: 300px; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
+    .pagination { display: flex; justify-content: center; align-items: center; gap: 10px; margin: 20px 0; }
+    .pagination button { padding: 8px 12px; border: 1px solid #ddd; background: white; cursor: pointer; border-radius: 4px; }
+    .pagination button:hover:not(:disabled) { background: #007cba; color: white; }
+    .pagination button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .pagination .page-info { color: #666; }
+    #statusMsg { margin: 8px 0; padding: 8px 12px; border-radius: 4px; font-size: 14px; display: none; }
+    #statusMsg.info  { background: #d1ecf1; color: #0c5460; display: block; }
+    #statusMsg.ok    { background: #d4edda; color: #155724; display: block; }
+    #statusMsg.error { background: #f8d7da; color: #721c24; display: block; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>📚 Calibre 圖書館查看器</h1>
+    <div class="header-actions">
+      <label class="btn btn-grey" style="cursor:pointer;">
+        📤 上傳 metadata.db
+        <input id="dbFile" type="file" accept=".db" style="display:none">
+      </label>
+      <a id="exportCsv" class="btn btn-green" href="#">📄 導出 CSV</a>
+    </div>
+  </div>
+
+  <div id="statusMsg"></div>
+  <div class="stats" id="stats"></div>
+
+  <div class="search-box">
+    <input type="text" id="searchInput" placeholder="🔍 搜尋書名、作者、標籤...">
+  </div>
+
+  <table id="booksTable">
+    <thead>
+      <tr>
+        <th>ID</th><th>標題</th><th>作者</th><th>系列</th><th>評分</th><th>標籤</th><th>格式</th><th>添加時間</th>
+      </tr>
+    </thead>
+    <tbody id="booksBody"></tbody>
+  </table>
+
+  <div class="pagination" id="pagination">
+    <button id="firstPage">首頁</button>
+    <button id="prevPage">上一頁</button>
+    <span class="page-info" id="pageInfo"></span>
+    <button id="nextPage">下一頁</button>
+    <button id="lastPage">末頁</button>
+  </div>
+
+  <div id="footer" style="margin-top:20px;text-align:center;color:#666;font-size:14px;"></div>
+</div>
+
+<!-- sql.js CDN -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/sql-wasm.js"></script>
+<script>
+  // Dropbox 同步改由後端代理，前端不再直接 fetch Dropbox（避免 CORS）
+
+  const statsEl    = document.getElementById('stats')
+  const bodyEl     = document.getElementById('booksBody')
+  const searchEl   = document.getElementById('searchInput')
+  const exportBtn  = document.getElementById('exportCsv')
+  const dbFile     = document.getElementById('dbFile')
+  const statusMsg  = document.getElementById('statusMsg')
+  const pageInfoEl = document.getElementById('pageInfo')
+  const firstPageBtn = document.getElementById('firstPage')
+  const prevPageBtn  = document.getElementById('prevPage')
+  const nextPageBtn  = document.getElementById('nextPage')
+  const lastPageBtn  = document.getElementById('lastPage')
+
+  let currentQuery = { page:1, pageSize:50, sortBy:'timestamp', sortOrder:'DESC', keyword:'' }
+  let totalPages = 1
+
+  // ── 狀態訊息 ──────────────────────────────────────────────────
+  function setStatus(msg, type = 'info') {
+    statusMsg.textContent = msg
+    statusMsg.className = type
+  }
+  function clearStatus() { statusMsg.className = ''; statusMsg.textContent = '' }
+
+  // ── 用 sql.js 解析 db ArrayBuffer，回傳 { books, stats } ─────
+  async function parseDb(arrayBuffer) {
+    const SQL = await initSqlJs({ locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.2/${file}` })
+    const db = new SQL.Database(new Uint8Array(arrayBuffer))
+
+    const rows = db.exec(`
+      SELECT
+        b.id,
+        b.title,
+        b.pubdate,
+        b.timestamp,
+        b.path,
+        b.isbn,
+        b.series_index,
+        (SELECT r.rating FROM books_ratings_link brl JOIN ratings r ON brl.rating=r.id WHERE brl.book=b.id) AS rating,
+        (SELECT GROUP_CONCAT(a.name, ' & ') FROM books_authors_link ba JOIN authors a ON ba.author=a.id WHERE ba.book=b.id) AS authors,
+        (SELECT s.name FROM books_series_link bs JOIN series s ON bs.series=s.id WHERE bs.book=b.id) AS series_name,
+        (SELECT p.name FROM books_publishers_link bp JOIN publishers p ON bp.publisher=p.id WHERE bp.book=b.id) AS publisher,
+        (SELECT GROUP_CONCAT(t.name, '; ') FROM books_tags_link bt JOIN tags t ON bt.tag=t.id WHERE bt.book=b.id) AS tags,
+        (SELECT GROUP_CONCAT(l.lang_code, '; ') FROM books_languages_link bl JOIN languages l ON bl.id=bl.lang_code WHERE bl.book=b.id) AS languages,
+        (SELECT GROUP_CONCAT(d.format, ';') FROM data d WHERE d.book=b.id) AS formats,
+        (SELECT c.text FROM comments c WHERE c.book=b.id LIMIT 1) AS comments
+      FROM books b
+      ORDER BY b.timestamp DESC
+    `)
+
+    const books = rows.length ? rows[0].values.map(row => {
+      const cols = rows[0].columns
+      const obj = {}
+      cols.forEach((c, i) => obj[c] = row[i])
+      // 把 pubdate / timestamp 轉成 ISO string
+      if (obj.pubdate && typeof obj.pubdate === 'number') obj.pubdate = new Date(obj.pubdate * 1000).toISOString()
+      if (obj.timestamp && typeof obj.timestamp === 'number') obj.timestamp = new Date(obj.timestamp * 1000).toISOString()
+      return obj
+    }) : []
+
+    // 統計
+    const statsRes = db.exec(`
+      SELECT
+        (SELECT COUNT(*) FROM books) AS total_books,
+        (SELECT COUNT(*) FROM authors) AS total_authors,
+        (SELECT COUNT(*) FROM series) AS total_series,
+        (SELECT COUNT(*) FROM tags) AS total_tags,
+        (SELECT COUNT(*) FROM publishers) AS total_publishers
+    `)
+    const stats = statsRes.length ? (() => {
+      const cols = statsRes[0].columns
+      const vals = statsRes[0].values[0]
+      const o = {}; cols.forEach((c,i) => o[c]=vals[i]); return o
+    })() : {}
+
+    db.close()
+    return { books, stats }
+  }
+
+  // ── 上傳解析後的 JSON 到後端（分批上傳，避免超出 6MB 限制）─────
+  async function uploadParsed(books, stats) {
+    const CHUNK = 200  // 每批 200 本
+    const total = books.length
+    for (let i = 0; i < total; i += CHUNK) {
+      const chunk = books.slice(i, i + CHUNK)
+      const isLast = (i + CHUNK) >= total
+      const res = await fetch('/api/upload', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          books: chunk,
+          stats: isLast ? stats : null,
+          offset: i,
+          total,
+          isLast
+        })
+      })
+      if (!res.ok) throw new Error('上傳失敗 HTTP ' + res.status)
+      const j = await res.json()
+      if (!j.ok) throw new Error(j.error || '後端錯誤')
+      setStatus(`⏫ 上傳中... ${Math.min(i + CHUNK, total)} / ${total} 本`, 'info')
+    }
+    return total
+  }
+
+  // ── 處理 db 檔案（共用邏輯）────────────────────────────────────
+  async function processDbBuffer(arrayBuffer, source) {
+    setStatus(`⏳ 正在解析 ${source}...`, 'info')
+    try {
+      const { books, stats } = await parseDb(arrayBuffer)
+      setStatus(`⏫ 解析完成（${books.length} 本），上傳中...`, 'info')
+      const count = await uploadParsed(books, stats)
+      setStatus(`✅ 完成！共同步 ${count} 本書籍`, 'ok')
+      await refresh()
+    } catch (e) {
+      setStatus('❌ ' + e.message, 'error')
+    }
+  }
+
+  // ── 本地上傳 ──────────────────────────────────────────────────
+  dbFile.addEventListener('change', async () => {
+    const f = dbFile.files[0]
+    if (!f) return
+    if (f.size > 100 * 1024 * 1024) { setStatus('❌ 文件太大（上限 100MB）', 'error'); return }
+    const buf = await f.arrayBuffer()
+    await processDbBuffer(buf, f.name)
+    dbFile.value = ''
+  })
+
+
+
+  // ── API 工具 ───────────────────────────────────────────────────
+  async function fetchJSON(url) {
+    const res = await fetch(url)
+    if (!res.ok) throw new Error('HTTP ' + res.status)
+    return res.json()
+  }
+
+  function renderStats(s) {
+    statsEl.innerHTML = `
+      <div class="stat-card"><div class="number">${s.total_books||0}</div><div class="label">書籍</div></div>
+      <div class="stat-card"><div class="number">${s.total_authors||0}</div><div class="label">作者</div></div>
+      <div class="stat-card"><div class="number">${s.total_series||0}</div><div class="label">系列</div></div>
+      <div class="stat-card"><div class="number">${s.total_tags||0}</div><div class="label">標籤</div></div>
+      <div class="stat-card"><div class="number">${s.total_publishers||0}</div><div class="label">出版商</div></div>
+    `
+  }
+
+  function stars(rating) {
+    if (!rating) return ''
+    return '⭐'.repeat(Math.floor(rating / 2))
+  }
+
+  function escapeHtml(s) {
+    return (s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
+  }
+
+  function renderRows(items) {
+    bodyEl.innerHTML = items.map(b => {
+      const addedDate = b.timestamp ? new Date(b.timestamp).toISOString().slice(0, 10) : ''
+      const formats = b.formats ? b.formats.split(';').join('<br>') : ''
+      return `<tr>
+        <td>${b.id}</td>
+        <td class="title">${escapeHtml(b.title||'')}</td>
+        <td class="authors">${escapeHtml(b.authors||'')}</td>
+        <td>${escapeHtml(b.series_name||'')}</td>
+        <td class="rating">${stars(b.rating)}</td>
+        <td class="tags">${escapeHtml(b.tags||'')}</td>
+        <td class="formats">${formats}</td>
+        <td>${addedDate}</td>
+      </tr>`
+    }).join('')
+  }
+
+  async function refresh() {
+    try {
+      const params = new URLSearchParams(currentQuery).toString()
+      const [stats, page] = await Promise.all([
+        fetchJSON('/api/stats'),
+        fetchJSON('/api/books?' + params),
+      ])
+      renderStats(stats)
+      renderRows(page.items || [])
+
+      totalPages = Math.ceil(page.total / currentQuery.pageSize) || 1
+      const startNum = (currentQuery.page - 1) * currentQuery.pageSize + 1
+      const endNum = Math.min(currentQuery.page * currentQuery.pageSize, page.total)
+
+      pageInfoEl.textContent = `第 ${currentQuery.page} / ${totalPages} 頁（${startNum}-${endNum} / ${page.total}）`
+      document.getElementById('footer').textContent = `共 ${stats.total_books||0} 本書籍`
+
+      firstPageBtn.disabled = currentQuery.page === 1
+      prevPageBtn.disabled  = currentQuery.page === 1
+      nextPageBtn.disabled  = currentQuery.page >= totalPages
+      lastPageBtn.disabled  = currentQuery.page >= totalPages
+    } catch(e) {
+      // 初次載入可能沒資料，靜默忽略
+    }
+  }
+
+  let searchTimer
+  searchEl.addEventListener('input', () => {
+    clearTimeout(searchTimer)
+    searchTimer = setTimeout(() => {
+      currentQuery.keyword = searchEl.value.trim()
+      currentQuery.page = 1
+      refresh()
+    }, 300)
+  })
+
+  exportBtn.addEventListener('click', (e) => {
+    e.preventDefault()
+    const params = new URLSearchParams(currentQuery).toString()
+    window.location.href = '/api/export?' + params
+  })
+
+  firstPageBtn.addEventListener('click', () => { currentQuery.page = 1; refresh() })
+  prevPageBtn.addEventListener('click',  () => { if (currentQuery.page > 1) { currentQuery.page--; refresh() } })
+  nextPageBtn.addEventListener('click',  () => { if (currentQuery.page < totalPages) { currentQuery.page++; refresh() } })
+  lastPageBtn.addEventListener('click',  () => { currentQuery.page = totalPages; refresh() })
+
+  refresh()
+</script>
+</body>
+</html>

@@ -1,0 +1,43 @@
+[build]
+  publish = "public"
+  command = "echo 'No build step needed'"
+
+[dev]
+  framework = "#static"
+  publish = "public"
+  autoLaunch = false
+
+# ── 一鍵部署時，提示使用者填入必要的環境變數 ──────────────────────
+[template.environment]
+  NETLIFY_API_TOKEN = "您的 Netlify Personal Access Token（前往 app.netlify.com/user/applications 取得）"
+
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+[[redirects]]
+  from = "/api/upload"
+  to = "/.netlify/functions/upload"
+  status = 200
+
+[[redirects]]
+  from = "/api/books"
+  to = "/.netlify/functions/books"
+  status = 200
+
+[[redirects]]
+  from = "/api/stats"
+  to = "/.netlify/functions/stats"
+  status = 200
+
+[[redirects]]
+  from = "/api/export"
+  to = "/.netlify/functions/export"
+  status = 200
+
+# 將所有前端路由交給 SPA 的 index.html
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
